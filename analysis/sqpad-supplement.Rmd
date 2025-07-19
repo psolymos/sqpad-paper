@@ -1,0 +1,807 @@
+---
+title: "Online Supplement - SQPAD"
+output: pdf_document
+---
+
+```{r include=FALSE}
+library(bSims)
+library(qs)
+library(rconfig)
+source("00-functions-sqpad.R")
+set.seed(123)
+```
+
+This document is the online supplement for the manuscript
+_Single bin QPAD (SQPAD) approach for robust analysis of point count data with detection error_.
+
+## Approach
+
+The following files can be found in this bundle:
+
+- `README.md`: instructions for running R scripts on a remote server
+- `00-functions-sqpad.R`: functions implementing the SQPAD estimating procedures
+- `01-functions-helpers.R`: functions for reproducing the analyses
+- `02-bsims-simulations.R`: synthetic simulation setups
+- `03-bsims-estimation.R`: estimating parameters from synthetic simulations
+- `04-field-data.R`: field data analysis using SQPAD
+- `05-summaries.R`: summarizing synthetic simulation and field data analysis results
+- `06-visualization.R`: producing figures for the manuscript
+
+You will need to have R and the following packages installed:
+
+- bSims: synthetic simulations
+- detect: parameter estimation
+- qs: fast read/write for binary R data sets
+- rconfig: easily configure R scripts at the command line
+- remotes: install packages from non-
+
+```{r eval=FALSE}
+install.packages(
+    pkgs = c('bSims', 'detect', 'qs', 'rconfig', 'mefa4', 'paired', 
+        'arrow', 'dplyr', 'ggplot2', 'extraDistr'),
+    repos = c('https://psolymos.r-universe.dev', 'https://cloud.r-project.org'))
+```
+
+If you are running the scripts on a remote server, you might want to
+set up your R environment on an Ubuntu Linux system following
+instructions in the `README.md` file.
+
+```{r warning=FALSE,message=FALSE}
+library(ggplot2)
+library(dplyr)
+library(arrow)
+library(mefa4)
+library(detect)
+library(paired)
+library(extraDistr)
+```
+
+## SQPAD examples
+
+### Simple simulated data
+
+First, we showcase the use of the functions in `00-functions-sqpad.R`.
+
+Simulate data under the SQPAD model:
+
+```{r}
+n <- 200
+x <- rnorm(n)
+D <- exp(-2 + 0.5 * x)
+phi <- 0.25
+tau <- 1
+dur <- sample(1:10, n, replace=TRUE)
+dis <- sample(seq(0.5, 2, 0.25), n, replace=TRUE)
+A <- dis^2 * pi
+p <- 1 - exp(-dur * phi * exp(-(dis*0.67)^2/tau^2))
+N <- rpois(n, D*A)
+Y <- rbinom(n, N, p)
+
+df <- data.frame(x = x, y = Y)
+```
+
+Fit the SQPAD model:
+
+```{r}
+m <- sqpad(y ~ x | 1, data = df, dis = dis, dur = dur)
+
+print(m)
+summary(m)
+```
+
+Methods to extract coefficients, sample size, variance-covariance matrix, confidence intervals:
+
+```{r}
+coef(m)
+nobs(m)
+vcov(m)
+confint(m)
+```
+
+Methods to extract log-likelihood and related informtion criteria:
+
+```{r}
+logLik(m)
+AIC(m)
+BIC(m)
+```
+
+Methods to get fitted values and predict for new data:
+
+```{r}
+summary(fitted(m))
+summary(predict(m))
+summary(predict(m, type = "response"))
+predict(m, newdata = df[1:10,], type = "link")
+predict(m, newdata = df[1:10,], type = "response")
+```
+
+Model selection using different models (`m` is the true model):
+
+```{r}
+m0 <- sqpad(y ~ 1 | 1, data = df, dis = dis, dur = dur)
+m1 <- sqpad(y ~ 1 | x, data = df, dis = dis, dur = dur)
+m2 <- sqpad(y ~ x | x, data = df, dis = dis, dur = dur)
+
+AIC(m, m0, m1, m2)
+BIC(m, m0, m1, m2)
+```
+
+### Using the convolution model
+
+Simulated data set and estimation:
+
+```{r}
+D <- 1
+phi <- 0.25
+tau <- 1.2
+n <- 200
+
+dur <- sample(1:10, n, replace=TRUE)
+dis <- sample(seq(0.25, 2, 0.25), n, replace=TRUE)
+A <- dis^2 * pi
+N <- rpois(n, D*A)
+dislist <- lapply(seq_len(n), function(i) {
+    dij <- extraDistr::rtriang(N[i], 0, dis[i], dis[i])
+    # pij is based on time of 1st detection and distance at 1st detection
+    pij <- 1 - exp(-dur[i] * phi * exp(-(dij)^2/tau^2))
+    Yij <- rbinom(length(pij), 1, pij)
+    dij[Yij > 0]
+})
+Y <- sapply(dis, length)
+
+m4 <- sqpad.fit(Y = Y, dis = dis, dur = dur, dislist = dislist, 
+    type = "conv", det = "joint", Nmax = 20)
+cbind(parameters = c(D = D, phi = phi, tau = tau), estimates = exp(m4$coef))
+```
+
+### Field data example
+
+This example uses Ovenbird as an example from the field data section and demonstrates
+how to use multiple-bin data using the composite likelihood approach to
+estimating model parameters.
+
+Data manipulation:
+
+```{r}
+x <- paired::paired
+x <- droplevels(x[x$SurveyType == "HUM" & x$Visit == 1 & !is.na(x$Latitude),])
+ID <- levels(x$UniqueID)
+
+spp <- "OVEN" # species ID
+
+id <- ID # site IDs to consider
+
+# when doing bootstrap, resample site IDs with replacement as
+# id <- sample(ID, length(ID), replace=TRUE)
+```
+
+Naive estimator:
+
+```{r}
+d <- nonDuplicated(x, UniqueID, TRUE)
+n <- nrow(d)
+X <- model.matrix(~scale(Latitude), d)
+rn <- rownames(d)
+
+yydis <- as.matrix(Xtab(Count ~ UniqueID + DISTANCE, 
+    x[x$SPECIES == spp,]))[rn,c("0-49 m", "50-100 m")]
+Y <- rowSums(yydis)
+Area <- rep(1^2 * pi, n) # 100m radius
+
+rn <- id
+mod_naive <- glm(count ~ lat, data.frame(count = Y[rn], lat=X[rn,2]), 
+    offset=log(Area), family=poisson)
+
+unname(mean(exp(X %*% coef(mod_naive))))
+```
+
+QPAD estimator:
+
+```{r}
+d <- nonDuplicated(x, UniqueID, TRUE)
+n <- nrow(d)
+X <- model.matrix(~scale(Latitude), d)
+Z <- model.matrix(~TSSR+I(TSSR^2), d)
+rn <- id
+
+# distance
+yydis <- as.matrix(Xtab(Count ~ UniqueID + DISTANCE, 
+    x[x$SPECIES == spp,]))[rn,c("0-49 m", "50-100 m")]
+dddis <- matrix(c(0.5, 1), nrow(yydis), 2, byrow=TRUE)
+mdis <- cmulti.fit(Y=yydis, D=dddis, type = "dis")
+
+# time
+yydur <- as.matrix(Xtab(Count ~ UniqueID + Interval,
+    x[x$SPECIES == spp & x$DISTANCE %in% c("0-49 m", "50-100 m"),]))[rn,
+    c("0-3 min", "3-5 min", "5-10 min")]
+dddur <- matrix(c(3, 5, 10), nrow(yydur), 3, byrow=TRUE)
+mdur <- cmulti.fit(Y=yydur, D=dddur, X=Z, type = "rem")
+
+# QPAD
+Y <- rowSums(yydis)
+TAU <- exp(coef(mdis))
+PHI <- exp(Z %*% coef(mdur))
+Area <- rep(1^2 * pi, n) # 100m radius
+p <- 1 - exp(-PHI * 10)
+r <- 1
+q <- TAU^2 * (1 - exp(-r^2/TAU^2))/r^2
+Off <- log(Area * p * q)
+
+mod_qpad <- glm(Y ~ lat, data.frame(lat=X[rn,2]), offset = Off, family=poisson)
+
+unname(mean(exp(X %*% coef(mod_qpad))))
+```
+
+SQPAD estimator:
+
+```{r eval=T}
+x$UniqueID <- as.character(x$UniqueID)
+xx <- do.call(rbind, lapply(1:length(id), function(i) {
+    z <- x[x$UniqueID==id[i],]
+    z$UniqueID <- paste0(z$UniqueID, "_", i)
+    z
+}))
+xx$UniqueID <- as.factor(xx$UniqueID)
+xt <- Xtab(Count ~ UniqueID + Interval + DISTANCE, xx[xx$SPECIES == spp,])
+d <- nonDuplicated(xx, UniqueID, TRUE)
+n <- nrow(d)
+
+y11 <- xt[["0-49 m"]][,c("0-3 min")]
+y12 <- rowSums(xt[["0-49 m"]][,c("0-3 min", "3-5 min")])
+y13 <- rowSums(xt[["0-49 m"]][,c("0-3 min", "3-5 min", "5-10 min")])
+y21 <- y11 + xt[["50-100 m"]][,c("0-3 min")]
+y22 <- y12 + rowSums(xt[["50-100 m"]][,c("0-3 min", "3-5 min")])
+y23 <- y13 + rowSums(xt[["50-100 m"]][,c("0-3 min", "3-5 min", "5-10 min")])
+y31 <- y11 + y21 + xt[[">100 m"]][,c("0-3 min")]
+y32 <- y12 + y22 + rowSums(xt[[">100 m"]][,c("0-3 min", "3-5 min")])
+y33 <- y13 + y23 + rowSums(xt[[">100 m"]][,c("0-3 min", "3-5 min", "5-10 min")])
+
+dis <- rep(c(0.5, 1), each = 3 * n)
+dur <- c(rep(c(3, 5, 10), each = n), rep(c(3, 5, 10), each = n))
+pid <- rep(1:n, 2*3)
+y <- c(y11, y12, y13, y21, y22, y23)
+
+X <- model.matrix(~scale(Latitude), d)[pid,]
+Z <- model.matrix(~TSSR+I(TSSR^2), d)[pid,]
+
+mod_sqpad_count <- sqpad.fit(Y=y, dis=dis, dur=dur, X=X, Z=Z, 
+    type = "full", det = "joint", K = NULL, hessian = FALSE)
+
+mod_sqpad_occ <- sqpad.fit(Y=y, dis=dis, dur=dur, X=X, Z=Z, 
+    type = "full", det = "joint", K = 1, hessian = FALSE)
+
+unname(mean(exp(X %*% coef(mod_sqpad_count)[1:ncol(X)])))
+unname(mean(exp(X %*% coef(mod_sqpad_occ)[1:ncol(X)])))
+```
+
+## Synthetic simulations
+
+We can easily modify simulation settings using the `02-bsims-simulations.R`
+R script at the command line. These will produce output files in the
+`_tmp/bsims` folder.
+
+The following command line arguments can be specified:
+
+- `all`: violate all assumptions (overrides `move`, `disterr`, `doublecount`, and `jointdist`)
+- `move`: introduce movement
+- `disterr`: introduce distance estimation error
+- `doublecount`: introduce double counting
+- `jointdist`: introduce joint distribution of time and distance
+- `n`: number of independent realizations to simulate
+- `D`: value for the population density (inds/ha)
+- `phi`: value for the innate cue rate parameter (1/min)
+- `tau`: value for the distance parameter (in 100 m units)
+- `dir`: output folder for saving results into
+
+You can vary these arguments. We used the following settings:
+
+```{bash eval=FALSE}
+Rscript --vanilla 02-bsims-simulations.R --D 0.5 --phi 0.25 --n 1000
+Rscript --vanilla 02-bsims-simulations.R --D 0.5 --phi 0.25 --jointdist --n 1000
+Rscript --vanilla 02-bsims-simulations.R --D 0.5 --phi 0.25 --all --n 1000
+Rscript --vanilla 02-bsims-simulations.R --D 0.5 --phi 0.25 --jointdist --move --disterr --n 1000
+Rscript --vanilla 02-bsims-simulations.R --D 0.5 --phi 0.25 --jointdist --move --doublecount --n 1000
+
+Rscript --vanilla 02-bsims-simulations.R --D 0.5 --phi 0.5 --n 1000
+Rscript --vanilla 02-bsims-simulations.R --D 0.5 --phi 0.5 --jointdist --n 1000
+Rscript --vanilla 02-bsims-simulations.R --D 0.5 --phi 0.5 --all --n 1000
+Rscript --vanilla 02-bsims-simulations.R --D 0.5 --phi 0.5 --jointdist --move --disterr --n 1000
+Rscript --vanilla 02-bsims-simulations.R --D 0.5 --phi 0.5 --jointdist --move --doublecount --n 1000
+
+Rscript --vanilla 02-bsims-simulations.R --D 1 --phi 0.25 --n 1000
+Rscript --vanilla 02-bsims-simulations.R --D 1 --phi 0.25 --jointdist --n 1000
+Rscript --vanilla 02-bsims-simulations.R --D 1 --phi 0.25 --all --n 1000
+Rscript --vanilla 02-bsims-simulations.R --D 1 --phi 0.25 --jointdist --move --disterr --n 1000
+Rscript --vanilla 02-bsims-simulations.R --D 1 --phi 0.25 --jointdist --move --doublecount --n 1000
+
+Rscript --vanilla 02-bsims-simulations.R --D 1 --phi 0.5 --n 1000
+Rscript --vanilla 02-bsims-simulations.R --D 1 --phi 0.5 --jointdist --n 1000
+Rscript --vanilla 02-bsims-simulations.R --D 1 --phi 0.5 --all --n 1000
+Rscript --vanilla 02-bsims-simulations.R --D 1 --phi 0.5 --jointdist --move --disterr --n 1000
+Rscript --vanilla 02-bsims-simulations.R --D 1 --phi 0.5 --jointdist --move --doublecount --n 1000
+```
+
+## Estimating parameters from simulations
+
+The `03-bsims-estimation.R` will estimate model parameters for various
+methods and write results into a file inside the `_tmp/est_conv` folder.
+
+The following command line arguments can be specified:
+
+- `dir`: output folder for saving results into
+- `B`: how many replicates to run
+- `n`: sample size for each replicate
+- `set`: one of the 16 setups we have in the `_tmp/bsims` folder
+- `replace`: whether sites (simulation realizations) should be picked with replacement
+- `notify`: flag when specified, it sends notifications via <https://docs.ntfy.sh/>
+
+You can vary these arguments. We used the following settings:
+
+```{bash eval=FALSE}
+Rscript --vanilla 03-bsims-estimation.R --B 2000 --notify --set 1
+Rscript --vanilla 03-bsims-estimation.R --B 2000 --notify --set 2
+Rscript --vanilla 03-bsims-estimation.R --B 2000 --notify --set 3
+Rscript --vanilla 03-bsims-estimation.R --B 2000 --notify --set 4
+
+Rscript --vanilla 03-bsims-estimation.R --B 2000 --notify --set 5
+Rscript --vanilla 03-bsims-estimation.R --B 2000 --notify --set 6
+Rscript --vanilla 03-bsims-estimation.R --B 2000 --notify --set 7
+Rscript --vanilla 03-bsims-estimation.R --B 2000 --notify --set 8
+
+Rscript --vanilla 03-bsims-estimation.R --B 2000 --notify --set 9
+Rscript --vanilla 03-bsims-estimation.R --B 2000 --notify --set 10
+Rscript --vanilla 03-bsims-estimation.R --B 2000 --notify --set 11
+Rscript --vanilla 03-bsims-estimation.R --B 2000 --notify --set 12
+
+Rscript --vanilla 03-bsims-estimation.R --B 2000 --notify --set 13
+Rscript --vanilla 03-bsims-estimation.R --B 2000 --notify --set 14
+Rscript --vanilla 03-bsims-estimation.R --B 2000 --notify --set 15
+Rscript --vanilla 03-bsims-estimation.R --B 2000 --notify --set 16
+```
+
+## Field data analysis
+
+Run analyses in the `04-field-data.R` R script. The `id` parameter refer to
+one of the 12 species with sufficient data for analyses:
+
+The following command line arguments can be specified:
+
+- `dir`: output folder for saving results into
+- `B`: how many nonparametric bootstrap iterations to run
+- `id`: species ID
+
+You can vary these arguments. We used the following settings:
+
+```{bash eval=FALSE}
+Rscript --vanilla 04-field-data.R --id 1
+Rscript --vanilla 04-field-data.R --id 2
+Rscript --vanilla 04-field-data.R --id 3
+Rscript --vanilla 04-field-data.R --id 4
+Rscript --vanilla 04-field-data.R --id 5
+Rscript --vanilla 04-field-data.R --id 6
+Rscript --vanilla 04-field-data.R --id 7
+Rscript --vanilla 04-field-data.R --id 8
+Rscript --vanilla 04-field-data.R --id 9
+Rscript --vanilla 04-field-data.R --id 10
+Rscript --vanilla 04-field-data.R --id 11
+Rscript --vanilla 04-field-data.R --id 12
+```
+
+## Simulation results
+
+```{r echo=FALSE,warning=FALSE,message=FALSE}
+xb0 <- as.data.frame(read_parquet("estimates_bsims_mc.parquet"))
+xb <- xb0[xb0$nobs == 200,]
+
+methods <- colnames(xb)[grep("_D\\.hat$", colnames(xb))]
+xb2 <- NULL
+for (i in methods) {
+    xb2 <- rbind(xb2,
+        data.frame(
+            xb[,c("D", "phi", "tau", "M", "E", "C", "J", "nobs", "maxdur", "maxdis", "run")],
+            Estimate = xb[,i],
+            Method = i,
+            LogLik = if (gsub("_D\\.hat$", "_LogLik", i) %in% colnames(xb)) xb[,gsub("_D\\.hat$", "_LogLik", i)] else NA_real_
+        )
+    )
+}
+xb2$Estimate[xb2$Estimate > 10*xb2$D] <- NA
+xb2$RelBias <- (xb2$Estimate - xb2$D) / xb2$D
+xb2$Method <- factor(xb2$Method, methods)
+levels(xb2$Method) <- gsub("_D\\.hat$", "", levels(xb2$Method))
+xb2$setup <- paste0("M", xb2$M, "-E", xb2$E, "-C", xb2$C, "-J", xb2$J)
+xb2$Density <- paste("Density =", xb2$D)
+xb2$CueRate <- paste("Cue Rate =", xb2$phi)
+# xbD <- droplevels(xb2[xb2$Method %in% c("CONV", "SVAfj",  "SVOfj", "QPAD", "PAD", "QAD", "NVE"),])
+xbD <- droplevels(xb2[xb2$Method %in% c("CONV", "SVAfjmc", "SVOfjmc", "QPAD", "PAD", "QAD", "NVE"),])
+xbD$Method <- factor(as.character(xbD$Method), c("CONV", "SVOfjmc", "SVAfjmc", "QPAD", "PAD", "QAD", "NVE"))
+levels(xbD$Method) <-                          c("Conv", "SQPAD-O", "SQPAD-C", "QPAD", "PAD", "QAD", "Naïve")
+mnD <- xbD |> 
+    group_by(setup, Method, CueRate, Density) |>
+    summarize(
+        RelBiasSE = sd(RelBias, na.rm=T),
+        RelBias = mean(RelBias, na.rm=T),
+        .groups = "keep"
+    ) |> as.data.frame()
+
+methods2 <- colnames(xb)[grep("_phi\\.hat$", colnames(xb))]
+xb2 <- NULL
+for (i in methods2) {
+    xb2 <- rbind(xb2,
+        data.frame(
+            xb[,c("D", "phi", "tau", "M", "E", "C", "J", "nobs", "maxdur", "maxdis", "run")],
+            Estimate = xb[,i],
+            Method = i
+        )
+    )
+}
+xb2$Estimate[xb2$Estimate > 10*xb2$phi] <- NA
+xb2$RelBias <- (xb2$Estimate - xb2$phi) / xb2$phi
+xb2$Method <- factor(xb2$Method, methods2)
+levels(xb2$Method) <- gsub("_phi\\.hat$", "", levels(xb2$Method))
+xb2$setup <- paste0("M", xb2$M, "-E", xb2$E, "-C", xb2$C, "-J", xb2$J)
+xb2$Density <- paste("Density =", xb2$D)
+xb2$CueRate <- paste("Cue Rate =", xb2$phi)
+xbPhi <- droplevels(xb2[xb2$Method %in% c("CONV", "SVAfjmc", "SVOfjmc", "QPAD", "PAD", "NVE"),])
+xbPhi$Method <- factor(as.character(xbPhi$Method), c("CONV", "SVOfjmc", "SVAfjmc", "QPAD", "PAD", "NVE"))
+levels(xbPhi$Method) <-                            c("Conv", "SQPAD-O", "SQPAD-C", "QPAD", "PAD", "Naïve")
+mnPhi <- xbPhi |> group_by(setup, Method, CueRate, Density) |>
+    summarize(
+        RelBiasSE = sd(RelBias, na.rm=T),
+        RelBias = mean(RelBias, na.rm=T),
+        .groups = "keep"
+    ) |> as.data.frame()
+
+methods2 <- colnames(xb)[grep("_tau\\.hat$", colnames(xb))]
+xb2 <- NULL
+for (i in methods2) {
+    xb2 <- rbind(xb2,
+        data.frame(
+            xb[,c("D", "phi", "tau", "M", "E", "C", "J", "nobs", "maxdur", "maxdis", "run")],
+            Estimate = xb[,i],
+            Method = i
+        )
+    )
+}
+xb2$Estimate[xb2$Estimate > 10*xb2$tau] <- NA
+xb2$RelBias <- (xb2$Estimate - xb2$tau) / xb2$tau
+xb2$Method <- factor(xb2$Method, methods2)
+levels(xb2$Method) <- gsub("_tau\\.hat$", "", levels(xb2$Method))
+xb2$setup <- paste0("M", xb2$M, "-E", xb2$E, "-C", xb2$C, "-J", xb2$J)
+xb2$Density <- paste("Density =", xb2$D)
+xb2$CueRate <- paste("Cue Rate =", xb2$phi)
+xbTau <- droplevels(xb2[xb2$Method %in% c("CONV", "SVAfjmc", "SVOfjmc", "QPAD", "QAD", "NVE"),])
+xbTau$Method <- factor(as.character(xbTau$Method), c("CONV", "SVOfjmc", "SVAfjmc", "QPAD", "QAD", "NVE"))
+levels(xbTau$Method) <-                            c("Conv", "SQPAD-O", "SQPAD-C", "QPAD", "QAD", "Naïve")
+mnTau <- xbTau |> group_by(setup, Method, CueRate, Density) |>
+    summarize(
+        RelBiasSE = sd(RelBias, na.rm=T),
+        RelBias = mean(RelBias, na.rm=T),
+        .groups = "keep"
+    ) |> as.data.frame()
+```
+
+```{r echo=FALSE,warning=FALSE,message=FALSE}
+for (i in 1:3) {
+    # setup <- c("M0-E0-C0-J1", "M1-E0-C1-J1", "M1-E1-C0-J1", "M1-E1-C1-J1")[i]
+    # setup_text <- c("No bias", "Double counting", "Distance estimation error", "Both biases")[i]
+    setup <- c("M0-E0-C0-J1", "M1-E0-C1-J1", "M1-E1-C0-J1")[i]
+    setup_text <- c("No violation", "Double counting", "Distance error")[i]
+
+    plD <- xbD[xbD$setup == setup,] |> 
+        ggplot(aes(x = Method, y = RelBias)) + 
+        geom_boxplot(outlier.shape = 1, outlier.size = 0.75) +
+        # geom_boxplot() +
+        geom_abline(slope = 0, intercept = 0, lty = 2) +
+        geom_point(aes(x = Method, y = RelBias), mnD[mnD$setup == setup,], shape=4, size=2.5) +
+        # coord_flip() +
+        # ylim(-1, NA) +
+        coord_cartesian(ylim = c(-1, 5)) +
+        theme_bw() +
+        facet_grid(rows=vars(CueRate), cols=vars(Density)) +
+        theme(axis.text = element_text(angle=90)) +
+        labs(x = "Estimator", y = "Relative Bias (Density)", title = setup_text)
+    plPhi <- xbPhi[xbPhi$setup == setup,] |> 
+        ggplot(aes(x = Method, y = RelBias)) + 
+        geom_boxplot(outlier.shape = 1, outlier.size = 0.75) +
+        # geom_boxplot() +
+        geom_abline(slope = 0, intercept = 0, lty = 2) +
+        geom_point(aes(x = Method, y = RelBias), mnPhi[mnPhi$setup == setup,], shape=4, size=2.5) +
+        # coord_flip() +
+        # ylim(-1, NA) +
+        coord_cartesian(ylim = c(-1, 2)) +
+        theme_bw() +
+        facet_grid(rows=vars(CueRate), cols=vars(Density)) +
+        theme(axis.text = element_text(angle=90)) +
+        labs(x = "Estimator", y = "Relative Bias (Cue Rate)", title = setup_text)
+    plTau <- xbTau[xbTau$setup == setup,] |> 
+        ggplot(aes(x = Method, y = RelBias)) + 
+        geom_boxplot(outlier.shape = 1, outlier.size = 0.75) +
+        # geom_boxplot() +
+        geom_abline(slope = 0, intercept = 0, lty = 2) +
+        geom_point(aes(x = Method, y = RelBias), mnTau[mnTau$setup == setup,], shape=4, size=2.5) +
+        # coord_flip() +
+        # ylim(-1, NA) +
+        coord_cartesian(ylim = c(-1, 1)) +
+        theme_bw() +
+        facet_grid(rows=vars(CueRate), cols=vars(Density)) +
+        theme(axis.text = element_text(angle=90)) +
+        labs(x = "Estimator", y = "Relative Bias (Distance Parameter)", title = setup_text)
+    print(plD)
+    print(plPhi)
+    print(plTau)
+}
+```
+
+```{r echo=FALSE,results="asis"}
+# setup_val <- c("M0-E0-C0-J1", "M1-E0-C1-J1", "M1-E1-C0-J1", "M1-E1-C1-J1")
+# setup_text <- c("No bias", "Double counting", "Distance estimation error", "Both biases")
+setup_val <- c("M0-E0-C0-J1", "M1-E0-C1-J1", "M1-E1-C0-J1")
+setup_text <- c("No violation", "Double counting", "Distance error")
+CN <- c("D=0.5, delta=0.25", "D=0.5, delta=0.5", "D=1, delta=0.25", "D=1, delta=0.5")
+# CN <- c("$D$=0.5, $\\delta$=0.25", "$D$=0.5, $\\delta$=0.5", "$D$=1, $\\delta$=0.25", "$D$=1, $\\delta$=0.5")
+
+tmp <- mnD |>
+    filter(setup %in% setup_val) |>
+    mutate(
+        Setup = factor(setup_text[match(setup, setup_val)], setup_text),
+        Density = ifelse(Density == "Density = 1", 1, 0.5),  
+        CueRate = ifelse(CueRate == "Cue Rate = 0.5", 0.5, 0.25),
+    ) |>
+    select(Setup, Density, CueRate, Method, RelBias, RelBiasSE) |>
+    arrange(Setup, Density, CueRate, Method)
+
+for (i in 1:3) {
+    tmp1 <- tmp[tmp$Setup == setup_text[i],]
+    mat1 <- matrix("", 7, 4)
+    rownames(mat1) <- tmp$Method[1:7]
+    colnames(mat1) <- CN
+    mat1[] <- paste0(round(tmp1$RelBias, 3), " [", round(tmp1$RelBiasSE, 3), "]")
+    k <- knitr::kable(mat1, align="r", caption = paste("Mean and Standard Error for the relative bias for Density,", setup_text[i]), escape=FALSE)
+    print(k)
+}
+```
+
+```{r echo=FALSE,results="asis"}
+tmp <- mnPhi |>
+    filter(setup %in% setup_val) |>
+    mutate(
+        Setup = factor(setup_text[match(setup, setup_val)], setup_text),
+        Density = ifelse(Density == "Density = 1", 1, 0.5),  
+        CueRate = ifelse(CueRate == "Cue Rate = 0.5", 0.5, 0.25),
+    ) |>
+    select(Setup, Density, CueRate, Method, RelBias, RelBiasSE) |>
+    arrange(Setup, Density, CueRate, Method)
+
+for (i in 1:3) {
+    tmp1 <- tmp[tmp$Setup == setup_text[i],]
+    mat1 <- matrix("", 5, 4)
+    rownames(mat1) <- tmp$Method[1:5]
+    colnames(mat1) <- CN
+    mat1[] <- paste0(round(tmp1$RelBias, 3), " [", round(tmp1$RelBiasSE, 3), "]")
+    k <- knitr::kable(mat1, align="r", caption = paste("Mean and Standard Error for the relative bias for Cue Rate,", setup_text[i]), escape=FALSE)
+    print(k)
+}
+
+```
+
+```{r echo=FALSE,results="asis"}
+tmp <- mnTau |>
+    filter(setup %in% setup_val) |>
+    mutate(
+        Setup = factor(setup_text[match(setup, setup_val)], setup_text),
+        Density = ifelse(Density == "Density = 1", 1, 0.5),  
+        CueRate = ifelse(CueRate == "Cue Rate = 0.5", 0.5, 0.25),
+    ) |>
+    select(Setup, Density, CueRate, Method, RelBias, RelBiasSE) |>
+    arrange(Setup, Density, CueRate, Method)
+
+for (i in 1:3) {
+    tmp1 <- tmp[tmp$Setup == setup_text[i],]
+    mat1 <- matrix("", 5, 4)
+    rownames(mat1) <- tmp$Method[1:5]
+    colnames(mat1) <- CN
+    mat1[] <- paste0(round(tmp1$RelBias, 3), " [", round(tmp1$RelBiasSE, 3), "]")
+    k <- knitr::kable(mat1, align="r", caption = paste("Mean and Standard Error for the relative bias for Distance Parameter,", setup_text[i]), escape=FALSE)
+    print(k)
+}
+
+```
+
+### Mean distance vs. average detection probability
+
+The `montecarlo` argument of the `sqpad` function can be set to:
+
+- `TRUE`: use Monte Carlo average probability,
+- `FALSE: use the mead distance to calculate an approximate probability.
+
+The following contour plot shows the detection probabilities using the
+two approaches based on different settings for:
+
+- Cue rate,
+- Distance parameter,
+- Duration (in minutes),
+- Distance (in meters).
+
+The mean distance based probability (`p(r0.66)`) can be lower than the
+Monte Carlo based mean probability (`mean(p_ij)`) for small values of the
+detection parameter and large distances:
+
+```{r include=FALSE}
+p1_test_fun <- function(npts = 100, phi = 0.25, tau = 1, dur = 10, dis = 1, distcorr = 2/3) {
+    dij <- extraDistr::rtriang(npts, 0, dis, dis)
+    pij <- mean(1 - exp(-dur * phi * exp(-(dij)^2/tau^2)))
+    pa <- 1 - exp(-dur * phi * exp(-(dis*distcorr)^2/tau^2))
+    c(
+        phi = phi,
+        tau = tau,
+        dur = dur,
+        dis = dis,
+        npts = npts,
+        p_approx = pa, 
+        p_ij = pij, 
+        p_ratio = pa / pij, 
+        p_reldiff = (pa - pij) / pij)
+}
+
+npts <- 100000
+
+v <- expand.grid(
+    tau = seq(0.1, 2, 0.1), 
+    phi = seq(0.1, 2, 0.1),
+    dur = c(3, 5, 10),
+    dis = c(0.5, 1, 1.5))
+
+x_p1 <- data.frame(t(sapply(1:nrow(v), \(i) {
+    p1_test_fun(npts = npts, phi = v$phi[i], tau = v$tau[i], dur = v$dur[i], dis = v$dis[i], distcorr = 2/3)
+})))
+x_p1$Duration <- paste0("Duration: ", x_p1$dur, " min")
+x_p1$Duration <- factor(x_p1$Duration, c("Duration: 3 min", "Duration: 5 min", "Duration: 10 min"))
+x_p1$Distance <- paste0("Distance: ", x_p1$dis*100, "m")
+x_p1$Distance <- factor(x_p1$Distance, c("Distance: 50m", "Distance: 100m", "Distance: 150m"))
+
+pCont <- x_p1 |> 
+    ggplot(aes(x = phi, y = tau, z = p_ratio)) +
+    theme_bw() +
+    geom_contour_filled(breaks = c(min(x_p1$p_ratio), 0.2, 0.4, 0.6, 0.8, 0.9, 1, 1.1, 1.2, max(x_p1$p_ratio))) +
+    labs(x = "Cue Rate", y = "Distance Parameter", fill = "p(r0.66) / mean(p_ij)") +
+    facet_grid(rows=vars(Duration), cols=vars(Distance))
+```
+
+```{r echo=FALSE,warning=FALSE,message=FALSE}
+pCont
+```
+
+We also checked how these approaches compare when estimating population density.
+We compared the Monte Carlo approach with the $p(r 0.66)$ and $p(r 0.5)$
+approximations. These all provided very similar results in terms of the
+distribution of the density ($D$) estimates. We compared the
+SQPAD occupancy (SO) and SQPAD count model (SC) to the Convolution and 
+Naive estimators:
+
+```{r include=FALSE}
+xb <- as.data.frame(arrow::read_parquet("estimates_bsims_mc.parquet"))
+
+methods <- colnames(xb)[grep("_D\\.hat$", colnames(xb))]
+xb2 <- NULL
+for (i in methods) {
+    xb2 <- rbind(xb2,
+        data.frame(
+            xb[,c("D", "phi", "tau", "M", "E", "C", "J", "nobs", "maxdur", "maxdis", "run")],
+            Estimate = xb[,i],
+            Method = i,
+            LogLik = if (gsub("_D\\.hat$", "_LogLik", i) %in% colnames(xb)) xb[,gsub("_D\\.hat$", "_LogLik", i)] else NA_real_
+        )
+    )
+}
+xb2$Estimate[xb2$Estimate > 10*xb2$D] <- NA
+xb2$RelBias <- (xb2$Estimate - xb2$D) / xb2$D
+xb2$Method <- factor(xb2$Method, methods)
+levels(xb2$Method) <- gsub("_D\\.hat$", "", levels(xb2$Method))
+xb2$setup <- paste0("M", xb2$M, "-E", xb2$E, "-C", xb2$C, "-J", xb2$J)
+xb2$Density <- paste("Density =", xb2$D)
+xb2$CueRate <- paste("Cue Rate =", xb2$phi)
+
+xbD <- droplevels(xb2[xb2$Method %in% c("CONV", "SVOfj",   "SVOfj05", "SVOfjmc", "SVAfj",   "SVAfj05", "SVAfjmc", "NVE"),])
+xbD$Method <- factor(as.character(xbD$Method), c("CONV", "SVOfj",   "SVOfj05", "SVOfjmc", "SVAfj",   "SVAfj05", "SVAfjmc", "NVE"))
+levels(xbD$Method) <-                          c("Conv", "SO-0.66", "SO-0.5",  "SO-MC",   "SC-0.66", "SC-0.5",  "SC-MC",   "Naïve")
+
+mnD <- xbD |> dplyr::group_by(setup, Method, CueRate, Density) |>
+    dplyr::summarize(RelBias = mean(RelBias, na.rm=T)) |> as.data.frame()
+
+# setup <- c("M0-E0-C0-J1", "M1-E0-C1-J1", "M1-E1-C0-J1")[i]
+# setup_text <- c("No violation", "Double counting", "Distance error")[i]
+
+plD1mc <- xbD[xbD$setup == "M0-E0-C0-J1",] |> 
+    ggplot(aes(x = Method, y = RelBias)) + 
+    geom_boxplot(outlier.shape = 1, outlier.size = 1) +
+    # geom_boxplot() +
+    geom_abline(slope = 0, intercept = 0, lty = 2) +
+    geom_point(aes(x = Method, y = RelBias), mnD[mnD$setup == "M0-E0-C0-J1",], shape=4, size=2.5) +
+    # coord_flip() +
+    # ylim(-1, NA) +
+    coord_cartesian(ylim = c(-1, 5)) +
+    theme_bw(base_size = 12) +
+    facet_grid(rows=vars(CueRate), cols=vars(Density)) +
+    theme(axis.text = element_text(angle=90)) +
+    labs(x = "Estimator", y = "Relative Bias (Density)", title = "No violation")
+
+plD2mc <- xbD[xbD$setup == "M1-E0-C1-J1",] |> 
+    ggplot(aes(x = Method, y = RelBias)) + 
+    geom_boxplot(outlier.shape = 1, outlier.size = 1) +
+    # geom_boxplot() +
+    geom_abline(slope = 0, intercept = 0, lty = 2) +
+    geom_point(aes(x = Method, y = RelBias), mnD[mnD$setup == "M1-E0-C1-J1",], shape=4, size=2.5) +
+    # coord_flip() +
+    # ylim(-1, NA) +
+    coord_cartesian(ylim = c(-1, 5)) +
+    theme_bw(base_size = 12) +
+    facet_grid(rows=vars(CueRate), cols=vars(Density)) +
+    theme(axis.text = element_text(angle=90)) +
+    labs(x = "Estimator", y = "Relative Bias (Density)", title = "Double counting")
+
+plD3mc <- xbD[xbD$setup == "M1-E1-C0-J1",] |> 
+    ggplot(aes(x = Method, y = RelBias)) + 
+    geom_boxplot(outlier.shape = 1, outlier.size = 1) +
+    # geom_boxplot() +
+    geom_abline(slope = 0, intercept = 0, lty = 2) +
+    geom_point(aes(x = Method, y = RelBias), mnD[mnD$setup == "M1-E1-C0-J1",], shape=4, size=2.5) +
+    # coord_flip() +
+    # ylim(-1, NA) +
+    coord_cartesian(ylim = c(-1, 5)) +
+    theme_bw(base_size = 12) +
+    facet_grid(rows=vars(CueRate), cols=vars(Density)) +
+    theme(axis.text = element_text(angle=90)) +
+    labs(x = "Estimator", y = "Relative Bias (Density)", title = "Distance error")
+```
+
+```{r echo=FALSE,warning=FALSE,message=FALSE}
+plD1mc
+plD2mc
+plD3mc
+```
+
+## Field data analysis
+
+```{r echo=FALSE,warning=FALSE,message=FALSE}
+# xf <- as.data.frame(read_parquet("estimates_field_data.parquet"))
+xf <- as.data.frame(read_parquet("estimates_field_data_mc.parquet"))
+# zq <- xf[xf$method %in% c("NVE", "QPAD", "SVAfj", "SVOfj"),] |> 
+zq <- xf[xf$method %in% c("NVE", "QPAD", "SVAfj", "SVAfjmc", "SVOfj", "SVOfjmc"),] |> 
+    group_by(method, species) |>
+    summarize(
+        mean = mean(estimate, na.rm=TRUE),
+        median = median(estimate, na.rm=TRUE),
+        lower = quantile(estimate, 0.025, na.rm=TRUE),
+        upper = quantile(estimate, 0.975, na.rm=TRUE)
+    ) |> as.data.frame()
+# zq$method <- factor(zq$method, rev(c("NVE",   "QPAD", "SVAfj",   "SVOfj")))
+# levels(zq$method) <- rev(c(          "Naïve", "QPAD", "SQPAD-C", "SQPAD-O"))
+zq$method <- factor(zq$method, rev(c("NVE",   "QPAD", "SVAfj",   "SVAfjmc", "SVOfj", "SVOfjmc")))
+levels(zq$method) <- rev(c(          "Naïve", "QPAD", "SQPAD-C [p(r0.66)]", "SQPAD-C [mean(p_ij)]", "SQPAD-O [p(r0.66)]", "SQPAD-O [mean(p_ij)]"))
+zq$shape <- 19
+zq$shape[zq$method %in% c("Naïve", "QPAD")] <- 21
+
+plField <- zq |> ggplot(aes(x = method, y = median, ymin = lower, ymax = upper)) +
+    geom_point(size = 2, shape = zq$shape) +
+    geom_linerange() +
+    coord_flip() +
+    theme_bw() +
+    ylim(0, NA) +
+    facet_wrap(vars(species), scales = "free_x") +
+    labs(x = "Estimator", y = "Density [males/ha]")
+print(plField)
+```
+
+```{r results="asis",echo=F}
+zq |> arrange(species, method) |> select(species, method, median, lower, upper) |>
+knitr::kable(digits = 3, caption = "Density estimates (median and 95% confidence limits) for field data")
+```
+
+## Session info
+
+```{r echo=FALSE,results="asis"}
+# devtools::session_info()
+toLatex(sessionInfo(), locale = FALSE)
+```
