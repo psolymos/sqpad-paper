@@ -363,15 +363,21 @@ zq$method <- factor(zq$method, rev(c("NVE",   "QPAD", "SVAfj",   "SVOfj")))
 levels(zq$method) <- rev(c(          "Naïve", "QPAD", "SQPAD-C", "SQPAD-O"))
 zq$shape <- 19
 zq$shape[zq$method %in% c("Naïve", "QPAD")] <- 21
+zq$scinam <- ""
+zq$scinam[zq$species == "CHSP"] <- "Spizella passerina"
+zq$scinam[zq$species == "DEJU"] <- "Junco hyemalis"
+zq$scinam[zq$species == "OVEN"] <- "Seiurus aurocapilla"
+zq$scinam[zq$species == "SWTH"] <- "Catharus ustulatus"
 
 plField <- zq |> ggplot(aes(x = method, y = median, ymin = lower, ymax = upper)) +
     geom_point(size = 2, shape = zq$shape) +
     geom_linerange() +
+    facet_wrap(vars(scinam), scales = "free_x") +
     coord_flip() +
     theme_bw(base_size = base_size) +
     ylim(0, NA) +
-    facet_wrap(vars(species), scales = "free_x") +
-    labs(x = "Estimator", y = "Density [males/ha]")
+    labs(x = "Estimator", y = "Density [males/ha]") +
+    theme(strip.text = element_text(face = "italic"))
 
 ggsave("fig6-species.pdf", plField)
 ggsave("fig6-species.png", plField)
