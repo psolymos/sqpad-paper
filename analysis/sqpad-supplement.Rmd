@@ -1,6 +1,10 @@
 ---
 title: "Online Supplement - SQPAD"
-output: pdf_document
+output:
+  pdf_document:
+    toc: true
+    number_sections: true
+documentclass: report
 ---
 
 ```{r include=FALSE}
@@ -14,12 +18,12 @@ set.seed(123)
 This document is the online supplement for the manuscript
 _Single bin QPAD (SQPAD) approach for robust analysis of point count data with detection error_.
 
-## Approach
+# Approach
 
 The following files can be found in this bundle:
 
 - `README.md`: instructions for running R scripts on a remote server
-- `00-functions-sqpad.R`: functions implementing the SQPAD estimating procedures
+- `00-functions-sqpad.R`: functions implementing the SQPAD estimating procedures (these are also part of the detect package)
 - `01-functions-helpers.R`: functions for reproducing the analyses
 - `02-bsims-simulations.R`: synthetic simulation setups
 - `03-bsims-estimation.R`: estimating parameters from synthetic simulations
@@ -38,9 +42,8 @@ You will need to have R and the following packages installed:
 
 ```{r eval=FALSE}
 install.packages(
-    pkgs = c('bSims', 'detect', 'qs', 'rconfig', 'mefa4', 'paired', 
-        'arrow', 'dplyr', 'ggplot2', 'extraDistr'),
-    repos = c('https://psolymos.r-universe.dev', 'https://cloud.r-project.org'))
+    pkgs = c('bSims', 'detect', 'qs', 'rconfig', 'mefa4', 
+        'arrow', 'dplyr', 'ggplot2', 'extraDistr'))
 ```
 
 If you are running the scripts on a remote server, you might want to
@@ -53,13 +56,12 @@ library(dplyr)
 library(arrow)
 library(mefa4)
 library(detect)
-library(paired)
 library(extraDistr)
 ```
 
-## SQPAD examples
+# SQPAD examples
 
-### Simple simulated data
+## Simple simulated data
 
 First, we showcase the use of the functions in `00-functions-sqpad.R`.
 
@@ -128,7 +130,7 @@ AIC(m, m0, m1, m2)
 BIC(m, m0, m1, m2)
 ```
 
-### Using the convolution model
+## Using the convolution model
 
 Simulated data set and estimation:
 
@@ -156,7 +158,7 @@ m4 <- sqpad.fit(Y = Y, dis = dis, dur = dur, dislist = dislist,
 cbind(parameters = c(D = D, phi = phi, tau = tau), estimates = exp(m4$coef))
 ```
 
-### Field data example
+## Field data example
 
 This example uses Ovenbird as an example from the field data section and demonstrates
 how to use multiple-bin data using the composite likelihood approach to
@@ -165,7 +167,7 @@ estimating model parameters.
 Data manipulation:
 
 ```{r}
-x <- paired::paired
+x <- detect::paired
 x <- droplevels(x[x$SurveyType == "HUM" & x$Visit == 1 & !is.na(x$Latitude),])
 ID <- levels(x$UniqueID)
 
@@ -276,7 +278,7 @@ unname(mean(exp(X %*% coef(mod_sqpad_count)[1:ncol(X)])))
 unname(mean(exp(X %*% coef(mod_sqpad_occ)[1:ncol(X)])))
 ```
 
-## Synthetic simulations
+# Synthetic simulations
 
 We can easily modify simulation settings using the `02-bsims-simulations.R`
 R script at the command line. These will produce output files in the
@@ -323,7 +325,7 @@ Rscript --vanilla 02-bsims-simulations.R --D 1 --phi 0.5 --jointdist --move --di
 Rscript --vanilla 02-bsims-simulations.R --D 1 --phi 0.5 --jointdist --move --doublecount --n 1000
 ```
 
-## Estimating parameters from simulations
+# Estimating parameters from simulations
 
 The `03-bsims-estimation.R` will estimate model parameters for various
 methods and write results into a file inside the `_tmp/est_conv` folder.
@@ -361,7 +363,7 @@ Rscript --vanilla 03-bsims-estimation.R --B 2000 --notify --set 15
 Rscript --vanilla 03-bsims-estimation.R --B 2000 --notify --set 16
 ```
 
-## Field data analysis
+# Field data analysis
 
 Run analyses in the `04-field-data.R` R script. The `id` parameter refer to
 one of the 12 species with sufficient data for analyses:
@@ -389,7 +391,7 @@ Rscript --vanilla 04-field-data.R --id 11
 Rscript --vanilla 04-field-data.R --id 12
 ```
 
-## Simulation results
+# Simulation results
 
 ```{r echo=FALSE,warning=FALSE,message=FALSE}
 xb0 <- as.data.frame(read_parquet("estimates_bsims_mc.parquet"))
@@ -414,7 +416,6 @@ levels(xb2$Method) <- gsub("_D\\.hat$", "", levels(xb2$Method))
 xb2$setup <- paste0("M", xb2$M, "-E", xb2$E, "-C", xb2$C, "-J", xb2$J)
 xb2$Density <- paste("Density =", xb2$D)
 xb2$CueRate <- paste("Cue Rate =", xb2$phi)
-# xbD <- droplevels(xb2[xb2$Method %in% c("CONV", "SVAfj",  "SVOfj", "QPAD", "PAD", "QAD", "NVE"),])
 xbD <- droplevels(xb2[xb2$Method %in% c("CONV", "SVAfjmc", "SVOfjmc", "QPAD", "PAD", "QAD", "NVE"),])
 xbD$Method <- factor(as.character(xbD$Method), c("CONV", "SVOfjmc", "SVAfjmc", "QPAD", "PAD", "QAD", "NVE"))
 levels(xbD$Method) <-                          c("Conv", "SQPAD-O", "SQPAD-C", "QPAD", "PAD", "QAD", "Naïve")
@@ -485,19 +486,14 @@ mnTau <- xbTau |> group_by(setup, Method, CueRate, Density) |>
 
 ```{r echo=FALSE,warning=FALSE,message=FALSE}
 for (i in 1:3) {
-    # setup <- c("M0-E0-C0-J1", "M1-E0-C1-J1", "M1-E1-C0-J1", "M1-E1-C1-J1")[i]
-    # setup_text <- c("No bias", "Double counting", "Distance estimation error", "Both biases")[i]
     setup <- c("M0-E0-C0-J1", "M1-E0-C1-J1", "M1-E1-C0-J1")[i]
     setup_text <- c("No violation", "Double counting", "Distance error")[i]
 
     plD <- xbD[xbD$setup == setup,] |> 
         ggplot(aes(x = Method, y = RelBias)) + 
         geom_boxplot(outlier.shape = 1, outlier.size = 0.75) +
-        # geom_boxplot() +
         geom_abline(slope = 0, intercept = 0, lty = 2) +
         geom_point(aes(x = Method, y = RelBias), mnD[mnD$setup == setup,], shape=4, size=2.5) +
-        # coord_flip() +
-        # ylim(-1, NA) +
         coord_cartesian(ylim = c(-1, 5)) +
         theme_bw() +
         facet_grid(rows=vars(CueRate), cols=vars(Density)) +
@@ -506,11 +502,8 @@ for (i in 1:3) {
     plPhi <- xbPhi[xbPhi$setup == setup,] |> 
         ggplot(aes(x = Method, y = RelBias)) + 
         geom_boxplot(outlier.shape = 1, outlier.size = 0.75) +
-        # geom_boxplot() +
         geom_abline(slope = 0, intercept = 0, lty = 2) +
         geom_point(aes(x = Method, y = RelBias), mnPhi[mnPhi$setup == setup,], shape=4, size=2.5) +
-        # coord_flip() +
-        # ylim(-1, NA) +
         coord_cartesian(ylim = c(-1, 2)) +
         theme_bw() +
         facet_grid(rows=vars(CueRate), cols=vars(Density)) +
@@ -519,11 +512,8 @@ for (i in 1:3) {
     plTau <- xbTau[xbTau$setup == setup,] |> 
         ggplot(aes(x = Method, y = RelBias)) + 
         geom_boxplot(outlier.shape = 1, outlier.size = 0.75) +
-        # geom_boxplot() +
         geom_abline(slope = 0, intercept = 0, lty = 2) +
         geom_point(aes(x = Method, y = RelBias), mnTau[mnTau$setup == setup,], shape=4, size=2.5) +
-        # coord_flip() +
-        # ylim(-1, NA) +
         coord_cartesian(ylim = c(-1, 1)) +
         theme_bw() +
         facet_grid(rows=vars(CueRate), cols=vars(Density)) +
@@ -536,12 +526,9 @@ for (i in 1:3) {
 ```
 
 ```{r echo=FALSE,results="asis"}
-# setup_val <- c("M0-E0-C0-J1", "M1-E0-C1-J1", "M1-E1-C0-J1", "M1-E1-C1-J1")
-# setup_text <- c("No bias", "Double counting", "Distance estimation error", "Both biases")
 setup_val <- c("M0-E0-C0-J1", "M1-E0-C1-J1", "M1-E1-C0-J1")
 setup_text <- c("No violation", "Double counting", "Distance error")
 CN <- c("D=0.5, delta=0.25", "D=0.5, delta=0.5", "D=1, delta=0.25", "D=1, delta=0.5")
-# CN <- c("$D$=0.5, $\\delta$=0.25", "$D$=0.5, $\\delta$=0.5", "$D$=1, $\\delta$=0.25", "$D$=1, $\\delta$=0.5")
 
 tmp <- mnD |>
     filter(setup %in% setup_val) |>
@@ -610,7 +597,7 @@ for (i in 1:3) {
 
 ```
 
-### Mean distance vs. average detection probability
+## Mean distance vs. average detection probability
 
 The `montecarlo` argument of the `sqpad` function can be set to:
 
@@ -711,17 +698,11 @@ levels(xbD$Method) <-                          c("Conv", "SO-0.66", "SO-0.5",  "
 mnD <- xbD |> dplyr::group_by(setup, Method, CueRate, Density) |>
     dplyr::summarize(RelBias = mean(RelBias, na.rm=T)) |> as.data.frame()
 
-# setup <- c("M0-E0-C0-J1", "M1-E0-C1-J1", "M1-E1-C0-J1")[i]
-# setup_text <- c("No violation", "Double counting", "Distance error")[i]
-
 plD1mc <- xbD[xbD$setup == "M0-E0-C0-J1",] |> 
     ggplot(aes(x = Method, y = RelBias)) + 
     geom_boxplot(outlier.shape = 1, outlier.size = 1) +
-    # geom_boxplot() +
     geom_abline(slope = 0, intercept = 0, lty = 2) +
     geom_point(aes(x = Method, y = RelBias), mnD[mnD$setup == "M0-E0-C0-J1",], shape=4, size=2.5) +
-    # coord_flip() +
-    # ylim(-1, NA) +
     coord_cartesian(ylim = c(-1, 5)) +
     theme_bw(base_size = 12) +
     facet_grid(rows=vars(CueRate), cols=vars(Density)) +
@@ -731,11 +712,8 @@ plD1mc <- xbD[xbD$setup == "M0-E0-C0-J1",] |>
 plD2mc <- xbD[xbD$setup == "M1-E0-C1-J1",] |> 
     ggplot(aes(x = Method, y = RelBias)) + 
     geom_boxplot(outlier.shape = 1, outlier.size = 1) +
-    # geom_boxplot() +
     geom_abline(slope = 0, intercept = 0, lty = 2) +
     geom_point(aes(x = Method, y = RelBias), mnD[mnD$setup == "M1-E0-C1-J1",], shape=4, size=2.5) +
-    # coord_flip() +
-    # ylim(-1, NA) +
     coord_cartesian(ylim = c(-1, 5)) +
     theme_bw(base_size = 12) +
     facet_grid(rows=vars(CueRate), cols=vars(Density)) +
@@ -745,11 +723,8 @@ plD2mc <- xbD[xbD$setup == "M1-E0-C1-J1",] |>
 plD3mc <- xbD[xbD$setup == "M1-E1-C0-J1",] |> 
     ggplot(aes(x = Method, y = RelBias)) + 
     geom_boxplot(outlier.shape = 1, outlier.size = 1) +
-    # geom_boxplot() +
     geom_abline(slope = 0, intercept = 0, lty = 2) +
     geom_point(aes(x = Method, y = RelBias), mnD[mnD$setup == "M1-E1-C0-J1",], shape=4, size=2.5) +
-    # coord_flip() +
-    # ylim(-1, NA) +
     coord_cartesian(ylim = c(-1, 5)) +
     theme_bw(base_size = 12) +
     facet_grid(rows=vars(CueRate), cols=vars(Density)) +
@@ -763,10 +738,9 @@ plD2mc
 plD3mc
 ```
 
-## Field data results
+# Field data results
 
 ```{r results="asis",echo=FALSE}
-# xf <- as.data.frame(read_parquet("estimates_field_data.parquet"))
 xf <- as.data.frame(read_parquet("estimates_field_data_mc.parquet"))
 sptable <- detect::paired |> 
     filter(!duplicated(SPECIES) & SPECIES %in% xf$species) |> 
@@ -777,7 +751,6 @@ knitr::kable(sptable, digits = 3, caption = "Species used in field data analysis
 ```
 
 ```{r echo=FALSE,warning=FALSE,message=FALSE}
-# zq <- xf[xf$method %in% c("NVE", "QPAD", "SVAfj", "SVOfj"),] |> 
 zq <- xf[xf$method %in% c("NVE", "QPAD", "SVAfj", "SVAfjmc", "SVOfj", "SVOfjmc"),] |> 
     group_by(method, species) |>
     summarize(
@@ -786,8 +759,6 @@ zq <- xf[xf$method %in% c("NVE", "QPAD", "SVAfj", "SVAfjmc", "SVOfj", "SVOfjmc")
         lower = quantile(estimate, 0.025, na.rm=TRUE),
         upper = quantile(estimate, 0.975, na.rm=TRUE)
     ) |> as.data.frame()
-# zq$method <- factor(zq$method, rev(c("NVE",   "QPAD", "SVAfj",   "SVOfj")))
-# levels(zq$method) <- rev(c(          "Naïve", "QPAD", "SQPAD-C", "SQPAD-O"))
 zq$method <- factor(zq$method, rev(c("NVE",   "QPAD", "SVAfj",   "SVAfjmc", "SVOfj", "SVOfjmc")))
 levels(zq$method) <- rev(c(          "Naïve", "QPAD", "SQPAD-C [p(r0.66)]", "SQPAD-C [mean(p_ij)]", "SQPAD-O [p(r0.66)]", "SQPAD-O [mean(p_ij)]"))
 zq$shape <- 19
@@ -809,10 +780,8 @@ zq |> arrange(species, method) |> select(species, method, median, lower, upper) 
 knitr::kable(digits = 3, caption = "Density estimates (median and 95% confidence limits) for field data")
 ```
 
-
-## Session info
+# Session info
 
 ```{r echo=FALSE,results="asis"}
-# devtools::session_info()
 toLatex(sessionInfo(), locale = FALSE)
 ```
