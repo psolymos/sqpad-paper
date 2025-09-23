@@ -33,7 +33,8 @@ You will need to have R and the following packages installed:
 - detect: parameter estimation
 - qs: fast read/write for binary R data sets
 - rconfig: easily configure R scripts at the command line
-- remotes: install packages from non-
+- remotes: install packages from non-CRAN repositories
+- extraDistr: implementing the triangular distribution that SQPAd uses
 
 ```{r eval=FALSE}
 install.packages(
@@ -98,7 +99,7 @@ vcov(m)
 confint(m)
 ```
 
-Methods to extract log-likelihood and related informtion criteria:
+Methods to extract log-likelihood and related information criteria:
 
 ```{r}
 logLik(m)
@@ -289,7 +290,7 @@ The following command line arguments can be specified:
 - `doublecount`: introduce double counting
 - `jointdist`: introduce joint distribution of time and distance
 - `n`: number of independent realizations to simulate
-- `D`: value for the population density (inds/ha)
+- `D`: value for the population density (individuals/ha)
 - `phi`: value for the innate cue rate parameter (1/min)
 - `tau`: value for the distance parameter (in 100 m units)
 - `dir`: output folder for saving results into
@@ -762,11 +763,20 @@ plD2mc
 plD3mc
 ```
 
-## Field data analysis
+## Field data results
 
-```{r echo=FALSE,warning=FALSE,message=FALSE}
+```{r results="asis",echo=FALSE}
 # xf <- as.data.frame(read_parquet("estimates_field_data.parquet"))
 xf <- as.data.frame(read_parquet("estimates_field_data_mc.parquet"))
+sptable <- detect::paired |> 
+    filter(!duplicated(SPECIES) & SPECIES %in% xf$species) |> 
+    arrange(SPECIES) |>
+    mutate(`Species Code`=SPECIES, `Species Name`=SpeciesName) |>
+    select(`Species Code`, `Species Name`)
+knitr::kable(sptable, digits = 3, caption = "Species used in field data analysis")
+```
+
+```{r echo=FALSE,warning=FALSE,message=FALSE}
 # zq <- xf[xf$method %in% c("NVE", "QPAD", "SVAfj", "SVOfj"),] |> 
 zq <- xf[xf$method %in% c("NVE", "QPAD", "SVAfj", "SVAfjmc", "SVOfj", "SVOfjmc"),] |> 
     group_by(method, species) |>
@@ -794,10 +804,11 @@ plField <- zq |> ggplot(aes(x = method, y = median, ymin = lower, ymax = upper))
 print(plField)
 ```
 
-```{r results="asis",echo=F}
+```{r results="asis",echo=FALSE}
 zq |> arrange(species, method) |> select(species, method, median, lower, upper) |>
 knitr::kable(digits = 3, caption = "Density estimates (median and 95% confidence limits) for field data")
 ```
+
 
 ## Session info
 
