@@ -10,3 +10,15 @@ of the detect R package (<https://github.com/psolymos/detect>).
 
 The bSims R package was used for conducting in-silico simulations
 (<https://github.com/psolymos/bSims>).
+
+## Combining PDF files
+
+Combine the appendix and supplement into a single PDF file:
+
+```R
+qpdf::pdf_combine(
+    input = c(
+        "analysis/sqpad-appendix.pdf", 
+        "analysis/sqpad-supplement.pdf"),
+    output = "paper/sqpad-online-supplement.pdf")
+```
