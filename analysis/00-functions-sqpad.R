@@ -352,7 +352,7 @@
         coefficients=cf, loglik=ll, vcov=S, nobs=length(Y), df=length(cf),
         summary=coefs,
         Y=Y, X=X, Z=Z, A=A, dur=dur, dis=dis, tt1=tt1, type=type, det=det,
-        Nmax = Nmax, K = K, 
+        Nmax = Nmax, K = K, dislist = dislist,
         montecarlo = montecarlo, np = np, dij = dij[1L,], distcorr = distcorr,
         init=init, hessian = hessian, method=method, results=opt)
     out
@@ -363,7 +363,7 @@ sqpad.fit <- function(
     type = c("full", "approx", "tt1", "conv"), det = c("joint", "pq"),
     init = NULL, method = "Nelder-Mead", hessian = TRUE,
     tt1 = NULL, A = NULL, Nmax = NULL, K = NULL, 
-    montecarlo = FALSE, np = 1000, distcorr = 2/3, ...) {
+    montecarlo = FALSE, np = 1000, distcorr = 2/3, dislist = NULL, ...) {
 
     Nmaxmax <- 100
     type <- match.arg(type)
@@ -390,6 +390,7 @@ sqpad.fit <- function(
         init = init, method = method, hessian = hessian,
         tt1 = tt1, A = A, Nmax = Nmax, K = K,
         montecarlo = montecarlo, np = np, distcorr = distcorr,
+        dislist = dislist,
         ...)
 
     out$call <- match.call()
@@ -533,3 +534,4 @@ predict.sqpad <- function(object, newdata = NULL, type = c("link", "response"), 
     }
     rval
 }
+
