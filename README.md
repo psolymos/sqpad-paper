@@ -1,7 +1,6 @@
 # sqpad-paper
 
-> Single bin QPAD (SQPAD) approach for robust analysis of point count data with detection error
-> by Lele &amp; Solymos
+> Lele, S. R. &amp; Sólymos, P., 2025. Single bin QPAD (SQPAD) approach for robust analysis of point count data with detection error. _Ornithological Applications_, in press.
 
 [![DOI](https://zenodo.org/badge/1022479131.svg)](https://doi.org/10.5281/zenodo.16172209)
 
